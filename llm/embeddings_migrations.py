@@ -62,17 +62,18 @@ def m004_store_content_hash(db):
     db.conn.create_function("temp_md5", 1, md5)
     db.conn.create_function("temp_random_md5", 0, random_md5)
 
-    with db.conn:
-        db.execute("""
-            update embeddings
-            set content_hash = temp_md5(content)
-            where content is not null
-        """)
-        db.execute("""
-            update embeddings
-            set content_hash = temp_random_md5()
-            where content is null
-        """)
+    # No `with db.conn:` here - Migrations.apply() already runs this in a
+    # db.atomic() transaction, and a nested conn context commits on exit.
+    db.execute("""
+        update embeddings
+        set content_hash = temp_md5(content)
+        where content is not null
+    """)
+    db.execute("""
+        update embeddings
+        set content_hash = temp_random_md5()
+        where content is null
+    """)
 
     db["embeddings"].create_index(["content_hash"])
 

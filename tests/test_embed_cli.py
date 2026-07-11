@@ -6,7 +6,7 @@ import pathlib
 import pytest
 import sqlite_utils
 import sys
-from unittest.mock import ANY
+from unittest.mock import ANY, patch
 
 
 @pytest.mark.parametrize(
@@ -684,6 +684,30 @@ def test_default_embed_model_errors(user_path, default_is_set, command):
     # At the end of this, there should be 2 embeddings
     db = sqlite_utils.Database(str(user_path / "embeddings.db"))
     assert db["embeddings"].count == 1
+
+
+def test_embed_multi_does_not_mask_unrelated_collection_errors(user_path, embed_demo):
+    # A ValueError raised by Collection() for a reason other than "no model
+    # configured" (e.g. a migration failure) must not be reported as the
+    # misleading "You need to specify an embedding model" message - a model
+    # is provided here via -m, so that message would be actively wrong.
+    runner = CliRunner()
+    with patch(
+        "llm.embeddings.embeddings_migrations.apply",
+        side_effect=ValueError("boom: migration failed"),
+    ):
+        result = runner.invoke(
+            cli,
+            ["embed-multi", "example", "-", "-m", "embed-demo"],
+            input="id,name\n1,hello",
+        )
+    assert result.exit_code != 0
+    assert (
+        "You need to specify an embedding model (no default model is set)"
+        not in result.output
+    )
+    assert isinstance(result.exception, ValueError)
+    assert str(result.exception) == "boom: migration failed"
 
 
 def test_duplicate_content_embedded_only_once(embed_demo):

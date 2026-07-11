@@ -3435,10 +3435,14 @@ def embed_multi(
         collection_obj = Collection(
             collection, db=db, model_id=model or get_default_embedding_model()
         )
-    except ValueError:
-        raise click.ClickException(
-            "You need to specify an embedding model (no default model is set)"
-        )
+    except ValueError as ex:
+        if str(ex) == (
+            "Either model= or model_id= must be provided when creating a new collection"
+        ):
+            raise click.ClickException(
+                "You need to specify an embedding model (no default model is set)"
+            )
+        raise
 
     expected_length = None
     if files:
