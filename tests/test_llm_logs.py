@@ -1149,6 +1149,72 @@ def test_log_to_db_persists_empty_reasoning_when_absent(logs_db, mock_model):
     assert not row.get("reasoning")
 
 
+def test_log_to_db_dedupes_response_text_from_fragmentless_previous_turn(
+    logs_db, mock_model
+):
+    """A previous turn's response text must be registered for
+    de-duplication even when that previous turn had no fragments.
+
+    Regression test: the `r:{previous_response.id}` replacement used to be
+    registered inside the per-fragment loop, so a fragment-less previous
+    turn was silently skipped and its text never condensed out of later
+    turns.
+    """
+    conversation = mock_model.conversation()
+
+    mock_model.enqueue(["previous turn reply"])
+    response1 = conversation.prompt("first turn, no fragments")
+    response1.text()
+    response1.log_to_db(logs_db)
+    assert not response1.prompt.fragments
+    assert not response1.prompt.system_fragments
+
+    mock_model.enqueue(["second turn reply"])
+    response2 = conversation.prompt("second turn")
+    response2.text()
+    # Simulate a raw provider payload that happens to repeat the previous
+    # turn's response text verbatim (e.g. echoed conversation history).
+    response2.response_json = {"echoed_history": response1.text_or_raise()}
+    response2.log_to_db(logs_db)
+
+    row = list(logs_db["responses"].rows)[-1]
+    response_json = json.loads(row["response_json"])
+    assert response_json["echoed_history"] == {"$": f"r:{response1.id}"}
+
+
+def test_log_to_db_uses_consistent_fragment_marker_keys(logs_db, mock_model):
+    """The same fragment must condense to the same marker key whether it
+    was attached to an earlier turn or to the turn being logged.
+
+    Regression test: fragments from previous turns were keyed as
+    `f:{fragment_id}` while the current turn's own fragments were keyed as
+    `f{fragment_id}` (no colon), so identical fragment content produced two
+    different marker representations depending on which turn logged it.
+    """
+    from llm.utils import ensure_fragment
+
+    migrate(logs_db)
+    shared_fragment_text = "shared fragment content for marker consistency"
+    fragment_id = ensure_fragment(logs_db, shared_fragment_text)
+
+    conversation = mock_model.conversation()
+
+    mock_model.enqueue(["previous turn reply"])
+    response1 = conversation.prompt("first turn", fragments=[shared_fragment_text])
+    response1.text()
+    response1.log_to_db(logs_db)
+
+    mock_model.enqueue(["second turn reply"])
+    response2 = conversation.prompt("second turn", fragments=[shared_fragment_text])
+    response2.text()
+    response2.response_json = {"echo": shared_fragment_text}
+    response2.log_to_db(logs_db)
+
+    row = list(logs_db["responses"].rows)[-1]
+    response_json = json.loads(row["response_json"])
+    assert response_json["echo"] == {"$": f"f:{fragment_id}"}
+
+
 def test_logs_markdown_renders_reasoning_heading(user_path):
     """When a row has reasoning text, `llm logs` renders a `## Reasoning`
     heading between System and Response."""
