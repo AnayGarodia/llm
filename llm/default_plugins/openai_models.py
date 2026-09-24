@@ -1463,6 +1463,12 @@ class Chat(_Shared, KeyModel):
                                 tool_call_id=tool_calls[idx].id,
                             )
                 try:
+                    reasoning_content = chunk.choices[0].delta.reasoning_content
+                except (IndexError, AttributeError):
+                    reasoning_content = None
+                if reasoning_content:
+                    yield StreamEvent(type="reasoning", chunk=reasoning_content)
+                try:
                     content = chunk.choices[0].delta.content
                 except IndexError:
                     content = None
@@ -1489,6 +1495,11 @@ class Chat(_Shared, KeyModel):
             )
             usage = completion.usage.model_dump()
             response.response_json = remove_dict_none_values(completion.model_dump())
+            reasoning_content = getattr(
+                completion.choices[0].message, "reasoning_content", None
+            )
+            if reasoning_content:
+                yield StreamEvent(type="reasoning", chunk=reasoning_content)
             for tool_call in completion.choices[0].message.tool_calls or []:
                 response.add_tool_call(
                     llm.ToolCall(
@@ -1581,6 +1592,12 @@ class AsyncChat(_Shared, AsyncKeyModel):
                                 tool_call_id=tool_calls[idx].id,
                             )
                 try:
+                    reasoning_content = chunk.choices[0].delta.reasoning_content
+                except (IndexError, AttributeError):
+                    reasoning_content = None
+                if reasoning_content:
+                    yield StreamEvent(type="reasoning", chunk=reasoning_content)
+                try:
                     content = chunk.choices[0].delta.content
                 except IndexError:
                     content = None
@@ -1605,6 +1622,11 @@ class AsyncChat(_Shared, AsyncKeyModel):
             )
             response.response_json = remove_dict_none_values(completion.model_dump())
             usage = completion.usage.model_dump()
+            reasoning_content = getattr(
+                completion.choices[0].message, "reasoning_content", None
+            )
+            if reasoning_content:
+                yield StreamEvent(type="reasoning", chunk=reasoning_content)
             for tool_call in completion.choices[0].message.tool_calls or []:
                 response.add_tool_call(
                     llm.ToolCall(

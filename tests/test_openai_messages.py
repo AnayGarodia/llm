@@ -581,6 +581,157 @@ class TestReasoningTokenCount:
         ), "should not add a redacted reasoning part when count=0"
 
 
+def _text_stream_with_reasoning_content():
+    """Stream from a DeepSeek-style OpenAI-compatible endpoint (e.g.
+    llama.cpp) that puts chain-of-thought text in delta.reasoning_content
+    ahead of the final answer in delta.content."""
+    yield _sse({"role": "assistant", "content": "", "reasoning_content": ""})
+    yield _sse({"reasoning_content": "Let me "})
+    yield _sse({"reasoning_content": "think."})
+    yield _sse({"content": "Hel"})
+    yield _sse({"content": "lo"})
+    yield _sse({}, finish_reason="stop")
+    yield b"data: [DONE]\n\n"
+
+
+class TestReasoningContentField:
+    """OpenAI-compatible endpoints such as llama.cpp and DeepSeek return
+    chain-of-thought text in a non-standard reasoning_content field
+    rather than as opaque reasoning_tokens usage; see issue #1689."""
+
+    def test_streaming_reasoning_content_yields_reasoning_events(self, httpx2_mock):
+        httpx2_mock.add_response(
+            method="POST",
+            url="https://api.openai.com/v1/chat/completions",
+            stream=IteratorStream(_text_stream_with_reasoning_content()),
+            headers={"Content-Type": "text/event-stream"},
+        )
+        model = llm.get_model("gpt-4o-mini")
+        response = model.prompt("hi", key=API_KEY)
+        events = list(response.stream_events())
+        assert [e.type for e in events] == ["reasoning", "reasoning", "text", "text"]
+        assert (
+            "".join(e.chunk for e in events if e.type == "reasoning") == "Let me think."
+        )
+        assert "".join(e.chunk for e in events if e.type == "text") == "Hello"
+
+    def test_streaming_reasoning_content_assembles_reasoning_part(self, httpx2_mock):
+        httpx2_mock.add_response(
+            method="POST",
+            url="https://api.openai.com/v1/chat/completions",
+            stream=IteratorStream(_text_stream_with_reasoning_content()),
+            headers={"Content-Type": "text/event-stream"},
+        )
+        model = llm.get_model("gpt-4o-mini")
+        response = model.prompt("hi", key=API_KEY)
+        response.text()
+        assert response.messages() == [
+            llm.Message(
+                role="assistant",
+                parts=[
+                    llm.parts.ReasoningPart(text="Let me think.", redacted=False),
+                    llm.parts.TextPart(text="Hello"),
+                ],
+            )
+        ]
+
+    def test_non_streaming_reasoning_content_assembles_reasoning_part(
+        self, httpx2_mock
+    ):
+        httpx2_mock.add_response(
+            method="POST",
+            url="https://api.openai.com/v1/chat/completions",
+            json={
+                "model": "gpt-4o-mini",
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Hello",
+                            "reasoning_content": "Let me think.",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+            headers={"Content-Type": "application/json"},
+        )
+        model = llm.get_model("gpt-4o-mini")
+        response = model.prompt("hi", key=API_KEY, stream=False)
+        response.text()
+        assert response.messages() == [
+            llm.Message(
+                role="assistant",
+                parts=[
+                    llm.parts.ReasoningPart(text="Let me think.", redacted=False),
+                    llm.parts.TextPart(text="Hello"),
+                ],
+            )
+        ]
+
+    @pytest.mark.asyncio
+    async def test_async_streaming_reasoning_content_yields_reasoning_events(
+        self, httpx2_mock
+    ):
+        httpx2_mock.add_response(
+            method="POST",
+            url="https://api.openai.com/v1/chat/completions",
+            stream=IteratorStream(_text_stream_with_reasoning_content()),
+            headers={"Content-Type": "text/event-stream"},
+        )
+        model = llm.get_async_model("gpt-4o-mini")
+        response = model.prompt("hi", key=API_KEY)
+        events = []
+        async for event in response.astream_events():
+            events.append(event)
+        assert [e.type for e in events] == ["reasoning", "reasoning", "text", "text"]
+
+    @pytest.mark.asyncio
+    async def test_async_non_streaming_reasoning_content_assembles_reasoning_part(
+        self, httpx2_mock
+    ):
+        httpx2_mock.add_response(
+            method="POST",
+            url="https://api.openai.com/v1/chat/completions",
+            json={
+                "model": "gpt-4o-mini",
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Hello",
+                            "reasoning_content": "Let me think.",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+            headers={"Content-Type": "application/json"},
+        )
+        model = llm.get_async_model("gpt-4o-mini")
+        response = model.prompt("hi", key=API_KEY, stream=False)
+        await response.text()
+        assert await response.messages() == [
+            llm.Message(
+                role="assistant",
+                parts=[
+                    llm.parts.ReasoningPart(text="Let me think.", redacted=False),
+                    llm.parts.TextPart(text="Hello"),
+                ],
+            )
+        ]
+
+
 class TestNonStreamingExecuteYieldsStreamEvents:
     def test_non_streaming_text_yields_single_event(self, httpx2_mock):
         httpx2_mock.add_response(
