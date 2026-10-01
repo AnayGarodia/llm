@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import concurrent.futures
 import dataclasses
 import datetime
 import functools
@@ -296,6 +297,24 @@ def _implementation_arguments(tool: "Tool", tool_call: "ToolCall") -> dict:
     if _accepts_llm_tool_call(tool.implementation):
         arguments["llm_tool_call"] = tool_call
     return arguments
+
+
+def _run_coroutine_sync(coro):
+    """Run an async coroutine from sync code, in a thread pool if needed.
+
+    Equivalent to ``asyncio.run(coro)`` when called from a thread with no
+    event loop. When called from inside a running event loop - e.g. a sync
+    chain invoked from async code - ``asyncio.run()`` would raise, so the
+    coroutine is instead driven to completion on its own event loop in a
+    separate thread.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, coro).result()
 
 
 class Toolbox:
@@ -1966,7 +1985,7 @@ class Response(_BaseResponse):
             try:
                 implementation_arguments = _implementation_arguments(tool, tool_call)
                 if inspect.iscoroutinefunction(tool.implementation):
-                    result = asyncio.run(
+                    result = _run_coroutine_sync(
                         tool.implementation(**implementation_arguments)
                     )
                 else:
@@ -2878,7 +2897,7 @@ class _BaseChainResponse:
     def log_to_db(self, db):
         for response in self._responses:
             if isinstance(response, AsyncResponse):
-                sync_response = asyncio.run(response.to_sync_response())
+                sync_response = _run_coroutine_sync(response.to_sync_response())
             elif isinstance(response, Response):
                 sync_response = response
             else:

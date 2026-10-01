@@ -364,6 +364,27 @@ def test_tool_use_async_tool_function():
 
 
 @pytest.mark.asyncio
+async def test_tool_use_async_tool_function_inside_running_loop():
+    # Regression test: a sync chain with an async tool is documented to
+    # run that tool "in a thread pool using asyncio.run()" so it also
+    # works when called from code that already has an event loop running
+    # (as this test does, via pytest-asyncio).
+    async def hello():
+        return "world"
+
+    model = llm.get_model("echo")
+    chain_response = model.chain(
+        json.dumps({"tool_calls": [{"name": "hello"}]}), tools=[hello]
+    )
+    chain_response.text()
+
+    second = chain_response._responses[1]
+    result = second.prompt.tool_results[0]
+    assert result.exception is None
+    assert result.output == "world"
+
+
+@pytest.mark.asyncio
 async def test_async_tools_run_tools_in_parallel():
     start_timestamps = []
 
@@ -928,6 +949,30 @@ async def test_chain_async_cancel_only_first_of_two():
     assert results[1].name == "t2"
     assert results[1].output == "ran2"
     assert results[1].exception is None
+
+
+@pytest.mark.asyncio
+async def test_async_chain_log_to_db_inside_running_loop(db_factory):
+    # Regression test: AsyncChainResponse.log_to_db() converts each
+    # AsyncResponse to a sync Response internally. It must work when
+    # called from code that already has an event loop running, same as
+    # chain.text() itself does.
+    async_model = llm.get_async_model("echo")
+
+    async def hello():
+        return "world"
+
+    chain = async_model.chain(
+        json.dumps({"tool_calls": [{"name": "hello"}]}), tools=[hello]
+    )
+    await chain.text()
+
+    db = db_factory(memory=True)
+    migrate(db)
+    chain.log_to_db(db)
+
+    turns = list(db["turns"].rows)
+    assert len(turns) == 2
 
 
 def test_tool_function_receives_llm_tool_call():
