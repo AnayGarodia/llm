@@ -377,3 +377,18 @@ async def test_async_reply_chains_three_turns():
     assert texts[0] == "q1"
     assert texts[2] == "q2"
     assert texts[4] == "q3"
+
+
+@pytest.mark.asyncio
+async def test_async_conversation_prompt_falls_back_to_conversation_tools():
+    """AsyncConversation.prompt() must fall back to self.tools when no
+    explicit tools are passed, matching Conversation.prompt() and both
+    chain() implementations (sync test: test_conversation_with_tools)."""
+
+    def double(x: int) -> int:
+        return x * 2
+
+    conversation = llm.get_async_model("echo").conversation(tools=[double])
+    response = conversation.prompt("hi")
+    await response.text()
+    assert [t.name for t in response.prompt.tools] == ["double"]
