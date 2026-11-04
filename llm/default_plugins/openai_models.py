@@ -1677,9 +1677,16 @@ class Chat(_Shared, KeyModel):
                                 tool_call_id=tool_calls[idx].id,
                             )
                 try:
-                    content = chunk.choices[0].delta.content
+                    delta = chunk.choices[0].delta
                 except IndexError:
-                    content = None
+                    delta = None
+                reasoning_content = getattr(delta, "reasoning_content", None)
+                if reasoning_content:
+                    # OpenAI-compatible endpoints (llama.cpp, DeepSeek, vLLM)
+                    # stream DeepSeek-style reasoning_content outside the
+                    # OpenAI SDK's typed fields; surface it as reasoning.
+                    yield StreamEvent(type="reasoning", chunk=reasoning_content)
+                content = getattr(delta, "content", None)
                 if content:
                     # Empty strings are noise (OpenAI's first chunk
                     # with role=assistant has content="").
@@ -1722,6 +1729,11 @@ class Chat(_Shared, KeyModel):
                     chunk=tool_call.function.arguments or "",
                     tool_call_id=tool_call.id,
                 )
+            reasoning_content = getattr(
+                completion.choices[0].message, "reasoning_content", None
+            )
+            if reasoning_content:
+                yield StreamEvent(type="reasoning", chunk=reasoning_content)
             if completion.choices[0].message.content is not None:
                 yield StreamEvent(
                     type="text",
@@ -1796,9 +1808,13 @@ class AsyncChat(_Shared, AsyncKeyModel):
                                 tool_call_id=tool_calls[idx].id,
                             )
                 try:
-                    content = chunk.choices[0].delta.content
+                    delta = chunk.choices[0].delta
                 except IndexError:
-                    content = None
+                    delta = None
+                reasoning_content = getattr(delta, "reasoning_content", None)
+                if reasoning_content:
+                    yield StreamEvent(type="reasoning", chunk=reasoning_content)
+                content = getattr(delta, "content", None)
                 if content:
                     yield StreamEvent(type="text", chunk=content)
             if tool_calls:
@@ -1839,6 +1855,11 @@ class AsyncChat(_Shared, AsyncKeyModel):
                     chunk=tool_call.function.arguments or "",
                     tool_call_id=tool_call.id,
                 )
+            reasoning_content = getattr(
+                completion.choices[0].message, "reasoning_content", None
+            )
+            if reasoning_content:
+                yield StreamEvent(type="reasoning", chunk=reasoning_content)
             if completion.choices[0].message.content is not None:
                 yield StreamEvent(
                     type="text",
