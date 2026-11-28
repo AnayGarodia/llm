@@ -472,6 +472,22 @@ def _code_interpreter_stream():
             "delta": "42",
         },
     )
+    response_json = _text_response_json(model="gpt-5.6-luna", text="42")
+    response_json["output"].insert(
+        0,
+        {
+            "id": "ci_stream",
+            "type": "code_interpreter_call",
+            "status": "completed",
+            "container_id": "cntr_stream",
+            "code": "print(6 * 7)",
+            "outputs": [{"type": "logs", "logs": "42\n"}],
+        },
+    )
+    yield _responses_sse(
+        "response.completed",
+        {"response": response_json},
+    )
 
 
 def _web_search_refresh_stream():
@@ -573,6 +589,10 @@ def _responses_reasoning_summary_stream():
             "logprobs": [],
             "sequence_number": 4,
         },
+    )
+    yield _responses_sse(
+        "response.completed",
+        {"response": _text_response_json(model="gpt-5.5", text="done")},
     )
 
 
@@ -1153,6 +1173,47 @@ def test_responses_streams_reasoning_summary_text(httpx2_mock):
         )
     ]
     assert response.text() == "done"
+
+
+def _responses_stream_cut_short():
+    """Mimic a connection that closes before response.completed arrives."""
+    yield _responses_sse(
+        "response.output_item.added",
+        {
+            "output_index": 0,
+            "item": {
+                "id": "msg_1",
+                "type": "message",
+                "status": "in_progress",
+                "role": "assistant",
+                "content": [],
+            },
+        },
+    )
+    yield _responses_sse(
+        "response.output_text.delta",
+        {
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "partial",
+        },
+    )
+    # No response.completed: the connection just ends here.
+
+
+def test_responses_stream_cut_short_raises(httpx2_mock):
+    httpx2_mock.add_response(
+        method="POST",
+        url="https://api.openai.com/v1/responses",
+        stream=IteratorStream(_responses_stream_cut_short()),
+        headers={"Content-Type": "text/event-stream"},
+    )
+
+    model = llm.get_model("gpt-5.5")
+    response = model.prompt("hello", key="test")
+    with pytest.raises(ValueError, match="response.completed"):
+        list(response.stream_events())
 
 
 @pytest.mark.vcr

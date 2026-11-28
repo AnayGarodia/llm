@@ -33,6 +33,14 @@ def _text_stream():
     yield b"data: [DONE]\n\n"
 
 
+def _text_stream_cut_short():
+    """Mimic a connection that closes before the server sends finish_reason."""
+    yield _sse({"role": "assistant", "content": ""})
+    yield _sse({"content": "Hel"})
+    yield _sse({"content": "lo"})
+    # No finish_reason chunk and no [DONE]: the connection just ends here.
+
+
 def _tool_call_stream():
     """Mimic an OpenAI stream with a tool call (no preceding text)."""
     yield _sse({"role": "assistant", "content": None})
@@ -414,6 +422,24 @@ class TestStreamingExecuteYieldsStreamEvents:
         chunks = list(response)
         assert all(isinstance(c, str) for c in chunks)
         assert "".join(chunks) == "Hello"
+
+    def test_text_stream_cut_short_warns_and_marks_truncated(self, httpx2_mock, capsys):
+        httpx2_mock.add_response(
+            method="POST",
+            url="https://api.openai.com/v1/chat/completions",
+            stream=IteratorStream(_text_stream_cut_short()),
+            headers={"Content-Type": "text/event-stream"},
+        )
+        model = llm.get_model("gpt-4o-mini")
+        response = model.prompt("hi", key=API_KEY)
+        events = list(response.stream_events())
+        # The partial text is still delivered.
+        assert "".join(e.chunk for e in events if e.type == "text") == "Hello"
+        # But a warning is printed and the logged response is flagged.
+        stderr = capsys.readouterr().err
+        assert "finish_reason" in stderr
+        assert response.response_json["llm_stream_truncated"] is True
+        assert "finish_reason" not in response.response_json
 
     def test_text_stream_messages_assembled(self, httpx2_mock):
         httpx2_mock.add_response(

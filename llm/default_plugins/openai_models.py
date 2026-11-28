@@ -1759,7 +1759,16 @@ class Chat(_Shared, KeyModel):
                     # Empty strings are noise (OpenAI's first chunk
                     # with role=assistant has content="").
                     yield StreamEvent(type="text", chunk=content)
-            response.response_json = remove_dict_none_values(combine_chunks(chunks))
+            combined = combine_chunks(chunks)
+            if chunks and combined.get("finish_reason") is None:
+                click.echo(
+                    "Warning: the stream ended without a finish_reason, the "
+                    "response may have been cut short by the server or "
+                    "connection",
+                    err=True,
+                )
+                combined["llm_stream_truncated"] = True
+            response.response_json = remove_dict_none_values(combined)
             if tool_calls:
                 for value in tool_calls.values():
                     response.add_tool_call(
@@ -2957,6 +2966,11 @@ class Responses(_SharedResponses, KeyModel):
                 response.response_json = remove_dict_none_values(final_response_dict)
                 yield from self._reasoning_refresh_events(
                     response.response_json, reasoning_done_events
+                )
+            else:
+                raise ValueError(
+                    "OpenAI Responses stream ended without a response.completed "
+                    "event - the connection was likely closed early"
                 )
         else:
             completion = client.responses.create(
